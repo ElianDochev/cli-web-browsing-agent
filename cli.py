@@ -1,19 +1,33 @@
 from typing import Dict, Any
+import argparse
+import os
+import contextlib
+import io
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from crewai import Agent, Task, Crew
 from crewai import LLM
 from crewai.tools import tool
 from crewai.flow.flow import Flow, start, listen
-from stagehand_tool import browser_automation
+from browser_agent import browser_automation
 
 
 load_dotenv()
 
+def get_llm_model(env_var: str, default_model: str = "openai/gpt-5-mini") -> str:
+    model_name = os.getenv(env_var)
+    if model_name is None:
+        return default_model
+    model_name = model_name.strip()
+    return model_name or default_model
+
+
 # Define our LLMs for providing to agents
-planner_llm = LLM(model="openai/gpt-5-mini")
-automation_llm = LLM(model="openai/gpt-5-mini")
-response_llm = LLM(model="openai/gpt-5-mini")
+planner_llm = LLM(model=get_llm_model("PLANNER_LLM_MODEL"))
+automation_llm = LLM(model=get_llm_model("AUTOMATION_LLM_MODEL"))
+response_llm = LLM(model=get_llm_model("RESPONSE_LLM_MODEL"))
 
 
 @tool("Stagehand Browser Tool")
@@ -35,6 +49,7 @@ def stagehand_browser_tool(task_description: str, website_url: str) -> str:
 class BrowserAutomationFlowState(BaseModel):
     query: str = ""
     result: str = ""
+    verbose: bool = False
 
 
 class AutomationPlan(BaseModel):
@@ -50,12 +65,14 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
 
     @start()
     def start_flow(self) -> Dict[str, Any]:
-        print(f"Flow started with query: {self.state.query}")
+        if self.state.verbose:
+            print(f"Flow started with query: {self.state.query}")
         return {"query": self.state.query}
 
     @listen(start_flow)
     def plan_task(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        print("--- Using Automation Planner to plan the task ---")
+        if self.state.verbose:
+            print("--- Using Automation Planner to plan the task ---")
 
         planner_agent = Agent(
             role="Automation Planner Specialist",
@@ -77,7 +94,7 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
             ),
         )
 
-        crew = Crew(agents=[planner_agent], tasks=[plan_task], verbose=True)
+        crew = Crew(agents=[planner_agent], tasks=[plan_task], verbose=self.state.verbose)
         result = crew.kickoff()
 
         # Add a fallback check to ensure we always have a valid website URL
@@ -92,7 +109,8 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
 
     @listen(plan_task)
     def handle_browser_automation(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        print("--- Delegating to Browser Automation Specialist ---")
+        if self.state.verbose:
+            print("--- Delegating to Browser Automation Specialist ---")
 
         automation_agent = Agent(
             role="Browser Automation Specialist",
@@ -114,13 +132,14 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
             markdown=True,
         )
 
-        crew = Crew(agents=[automation_agent], tasks=[automation_task], verbose=True)
+        crew = Crew(agents=[automation_agent], tasks=[automation_task], verbose=self.state.verbose)
         result = crew.kickoff()
         return {"result": str(result)}
 
     @listen(handle_browser_automation)
     def synthesize_result(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        print("--- Synthesizing Final Response ---")
+        if self.state.verbose:
+            print("--- Synthesizing Final Response ---")
 
         synthesis_agent = Agent(
             role="Response Synthesis Specialist",
@@ -131,31 +150,99 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
 
         synthesis_task = Task(
             description=(
-                f"Review the following browser automation specialist result and present it as a generalized, coherent response for the end user:\n\n"
-                f"{inputs['result']}"
+                "You are a summarizer. Produce a concise, relevant answer to the user's original query. "
+                "Only include information that directly answers the question. If the result contains noise, ignore it. "
+                "Keep the response under 5 sentences or 6 bullet points. Do not include raw page dumps or boilerplate.\n\n"
+                f"Original query: {self.state.query}\n\n"
+                f"Browser automation result:\n{inputs['result']}"
             ),
-            expected_output="A concise, user-facing response of the browser automation result.",
+            expected_output=(
+                "A short, relevant summary that directly answers the original query, with no irrelevant details."
+            ),
             agent=synthesis_agent,
         )
 
-        crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task], verbose=True)
+        crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task], verbose=self.state.verbose)
         final_result = crew.kickoff()
         return {"result": str(final_result)}
 
 
-# Usage example
-async def main():
+async def run_flow(query: str, output_path: str | None = None, verbose: bool = False) -> None:
     flow = BrowserAutomationFlow()
-    flow.state.query = "Extract the top contributor's username from this GitHub repository: https://github.com/browserbase/stagehand"
-    result = await flow.kickoff_async()
+    flow.state.query = query
+    flow.state.verbose = verbose
+    os.environ["STAGEHAND_VERBOSE"] = "1" if verbose else "0"
+
+    if not verbose:
+        print(f"Prompt: {query}")
+        print("Executing...")
+    if verbose:
+        result = await flow.kickoff_async()
+    else:
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+                result = await flow.kickoff_async()
+        except Exception:
+            captured = buffer.getvalue().strip()
+            if captured:
+                sys.stderr.write(captured + "\n")
+            raise
 
     print(f"\n{'='*50}")
-    print(f"FINAL RESULT")
+    print("FINAL RESULT")
     print(f"{'='*50}")
     print(result["result"])
+
+    if output_path:
+        output_file = Path(output_path)
+        output_file.write_text(
+            f"PROMPT:\n{query}\n\nRESULT:\n{result['result']}\n",
+            encoding="utf-8",
+        )
+
+
+def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
+    parser = argparse.ArgumentParser(description="Run browser automation flow.")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("-p", "--prompt", help="Prompt text to run.")
+    input_group.add_argument(
+        "-f",
+        "--file",
+        help="Path to a file containing the prompt.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Optional output file to save the prompt and result.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show detailed execution steps.",
+    )
+    return parser, parser.parse_args()
+
+
+def load_prompt(prompt: str | None, file_path: str | None, parser: argparse.ArgumentParser) -> str:
+    if prompt is not None:
+        prompt_text = prompt.strip()
+        if not prompt_text:
+            parser.error("Prompt cannot be empty.")
+        return prompt_text
+    if file_path:
+        prompt_text = Path(file_path).read_text(encoding="utf-8").strip()
+        if not prompt_text:
+            parser.error("Prompt file is empty.")
+        return prompt_text
+    parser.error("Either -p/--prompt or -f/--file is required.")
+    return ""
 
 
 if __name__ == "__main__":
     import asyncio
 
-    asyncio.run(main())
+    parser, args = parse_args()
+    prompt_text = load_prompt(args.prompt, args.file, parser)
+    asyncio.run(run_flow(prompt_text, args.output, args.verbose))

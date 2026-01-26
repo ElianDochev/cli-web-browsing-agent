@@ -11,6 +11,12 @@ nest_asyncio.apply()
 def browser_automation(task_description: str, website_url: str) -> str:
     """Performs automated browser tasks using AI agent capabilities."""
 
+    def _get_verbose_level() -> int:
+        try:
+            return int(os.getenv("STAGEHAND_VERBOSE", "0").strip() or "0")
+        except ValueError:
+            return 0
+
     async def _execute_automation():
         stagehand = None
 
@@ -21,7 +27,7 @@ def browser_automation(task_description: str, website_url: str) -> str:
                 self_heal=True,
                 system_prompt="You are a browser automation assistant that helps users navigate websites effectively.",
                 model_client_options={"apiKey": os.getenv("MODEL_API_KEY")},
-                verbose=1,
+                verbose=_get_verbose_level(),
             )
 
             stagehand = Stagehand(config)
