@@ -2,6 +2,8 @@
 
 We're building a local, multi-agent browser automation system powered by CrewAI and Stagehand. It leverages autonomous agents to plan, execute, and synthesize web automation tasks using natural language queries.
 
+![Demo](static/demo.gif)
+
 How It Works:
 
 1.  **Query Submission**: User submits natural language query describing desired browser automation task.
