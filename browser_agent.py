@@ -7,7 +7,6 @@ import asyncio
 # Allow nested loops in async (for environments like Jupyter or already-running loops)
 nest_asyncio.apply()
 
-
 def browser_automation(task_description: str, website_url: str) -> str:
     """Performs automated browser tasks using AI agent capabilities."""
 

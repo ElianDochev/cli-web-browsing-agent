@@ -5,6 +5,7 @@ import contextlib
 import io
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from crewai import Agent, Task, Crew
@@ -22,6 +23,20 @@ def get_llm_model(env_var: str, default_model: str = "openai/gpt-5-mini") -> str
         return default_model
     model_name = model_name.strip()
     return model_name or default_model
+
+
+def normalize_and_validate_url(raw_url: str) -> str | None:
+    if not raw_url:
+        return None
+    candidate = raw_url.strip()
+    if not candidate:
+        return None
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parsed = urlparse(candidate)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    return candidate
 
 
 # Define our LLMs for providing to agents
@@ -98,9 +113,9 @@ class BrowserAutomationFlow(Flow[BrowserAutomationFlowState]):
         result = crew.kickoff()
 
         # Add a fallback check to ensure we always have a valid website URL
-        website_url = result.pydantic.website_url
-        if not website_url or website_url.lower() in ["", "none", "null", "n/a"]:
-            result["website_url"] = "https://www.google.com"
+        website_url = normalize_and_validate_url(result.pydantic.website_url)
+        if website_url is None:
+            website_url = "https://www.google.com"
 
         return {
             "task_description": result["task_description"],

@@ -40,6 +40,7 @@ MODEL_API_KEY=<your_openai_api_key>
 PLANNER_LLM_MODEL=openai/gpt-5-mini
 AUTOMATION_LLM_MODEL=openai/gpt-5-mini
 RESPONSE_LLM_MODEL=openai/gpt-5-mini
+STAGEHAND_MODEL=gpt-4o
 ```
 
 You must provide valid API keys. `OPENAI_API_KEY` is used by CrewAI LLM calls and `MODEL_API_KEY` is used by Stagehand. If you use a different provider or local gateway, set the appropriate model string(s) in `PLANNER_LLM_MODEL`, `AUTOMATION_LLM_MODEL`, and `RESPONSE_LLM_MODEL` to match your provider, and supply the required API key in `.env`.
